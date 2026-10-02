@@ -1,346 +1,236 @@
 # 🏥 EVE Healthcare — Diagnostic Test Booking & Simulated Payment Service
 
-> **Engineering Assessment Submission**: Backend Engineering & API Service  
-> **Role Target**: SDE 1 / Backend Software Engineer  
-> **Tech Stack**: Node.js 20+, TypeScript, Express, Prisma ORM, SQLite / PostgreSQL, Jest, Docker  
-> **Evaluation Profile**: Code Quality, API Design, Relational Modeling, Strict Idempotency, Concurrency Handling, and Defensive Edge-Case Engineering.
+> **SDE Intern / Backend Engineering Assignment Submission**  
+> A production-grade backend service and interactive web application for diagnostic test bookings, simulated payment processing, and idempotent payment webhooks.
 
 ---
 
-## 📑 Table of Contents
-1. [Architecture & System Design](#-architecture--system-design)
-2. [Database Schema & ER Diagram](#-database-schema--er-diagram)
-3. [Booking State Machine](#-booking-state-machine)
-4. [Quickstart: Zero-Friction Local Run](#-quickstart-zero-friction-local-run)
-5. [Docker & Containerized Setup](#-docker--containerized-setup)
-6. [API Documentation & Interactive Swagger UI](#-api-documentation--interactive-swagger-ui)
-7. [API Endpoints & Curl Examples](#-api-endpoints--curl-examples)
-8. [Idempotency & Concurrency Deep Dive](#-idempotency--concurrency-deep-dive)
-9. [Edge-Case Handling Matrix](#-edge-case-handling-matrix)
-10. [Test Suite Execution](#-test-suite-execution)
-11. [Design Assumptions](#-design-assumptions)
-12. [Future Improvements & Production Readiness](#-future-improvements--production-readiness)
+## 🛠️ Tech Stack & Technologies Used
+
+Everything used in this project was selected for type safety, maintainability, production reliability, and developer experience:
+
+### ⚙️ Backend Core
+- **Runtime**: [Node.js](https://nodejs.org/) (v20+) — Asynchronous, event-driven JavaScript/TypeScript runtime.
+- **Language**: [TypeScript](https://www.typescriptlang.org/) (v5.9+) — Strict static typing preventing runtime errors and ensuring type-safe API contracts.
+- **Framework**: [Express 5](https://expressjs.com/) — Fast, unopinionated web framework configured with modular routing and global error handling.
+- **Execution**: [`tsx`](https://github.com/privatenumber/tsx) — Zero-config TypeScript execution with hot-reloading for development.
+
+### 🗄️ Database & ORM
+- **ORM**: [Prisma ORM](https://www.prisma.io/) (v5.22+) — Next-generation type-safe ORM with automated migrations, relational querying, and atomic `$transaction` support.
+- **Databases**:
+  - **SQLite** (`file:./eve_healthcare.db`) — Preconfigured by default for instant, zero-friction local development and running automated tests without needing a running database server.
+  - **PostgreSQL 16** (`schema.postgresql.prisma`) — Supported as the assignment's preferred production database with strict relational schemas, foreign key cascades, and `DECIMAL(10,2)` monetary precision.
+
+### 🔒 Security, Validation & Utilities
+- **Data Validation**: [Zod](https://zod.dev/) — Strict schema validation for request bodies, query strings, URL parameters, and startup environment variables.
+- **Authentication**: [JSON Web Tokens (JWT)](https://jwt.io/) & [bcryptjs](https://github.com/dcodeIO/bcrypt.js) — Stateless JWT-based authentication with salted password hashing (cost factor 10) and Role-Based Access Control (`PATIENT`, `ADMIN`).
+- **Webhook Security**: Node.js `crypto` HMAC-SHA256 signature verification with `crypto.timingSafeEqual` to prevent timing attacks.
+- **Rate Limiting**: `express-rate-limit` — IP-based sliding window rate limiter (200 reqs/15m) to prevent DoS attacks.
+- **CORS**: `cors` — Cross-Origin Resource Sharing enabled for frontend communication.
+- **Logging & Tracing**: `morgan` HTTP access logger and custom UUID `X-Request-ID` tracing middleware for request correlation.
+- **API Documentation**: [Swagger UI Express](https://github.com/scottie1984/swagger-ui-express) — Interactive OpenAPI documentation served directly at `/api/docs`.
+
+### 🧪 Automated Testing
+- **Test Runner**: [Jest](https://jestjs.io/) (v30+) with `ts-jest` for TypeScript test execution.
+- **HTTP Assertion**: [Supertest](https://github.com/ladjs/supertest) — High-level HTTP abstractions for integration testing.
+- **Coverage**: 30 comprehensive integration tests covering Auth, Catalog, Bookings, Payments, and Webhook Concurrency Race Conditions.
+
+### 💻 Frontend Application
+- **Framework**: [React 18](https://react.dev/) + Plain JavaScript.
+- **Build Tool**: [Vite](https://vitejs.dev/) — Lightning-fast HMR and bundle optimization.
+- **Icons**: [Lucide React](https://lucide.dev/) — Modern, lightweight UI icon library.
+- **Styling**: Modern Vanilla CSS Design System with dark mode, responsive grid, dynamic badges, and interactive modals.
+
+### 🐳 DevOps & Containerization
+- **Docker**: Multi-stage `Dockerfile` with non-root security compliance.
+- **Docker Compose**: Orchestrates `Node.js API` + `PostgreSQL 16` + `Redis 7` with health checks.
 
 ---
 
-## 🏛 Architecture & System Design
+## 📋 Prerequisites
 
-The service is architected following the **Clean Layered Architecture (Separation of Concerns)** pattern:
-
-```mermaid
-graph TD
-    Client["Client / Web / Mobile App"] -->|"HTTP / REST (JWT Auth)"| Middlewares["Middlewares (RateLimit, RequestID, Auth, Zod Validation)"]
-    Provider["Simulated Payment Provider"] -->|"POST /payments/webhook"| Middlewares
-    Middlewares --> Controllers["Controllers (HTTP Boundary)"]
-    Controllers --> Services["Services (Domain Business Logic & State Machines)"]
-    Services --> Transactions["Prisma Atomic Transactions ($transaction)"]
-    Transactions --> Database[("Relational Database (PostgreSQL / SQLite)")]
-    Services --> IdempotencyStore[("Webhook Idempotency Store (Unique eventId)")]
-```
-
-### Layer Breakdown
-- **`src/routes/`**: Route definitions with semantic RESTful URLs and versioning (`/api/v1/`).
-- **`src/controllers/`**: HTTP transport layer extracting inputs, delegating to services, and returning structured API responses.
-- **`src/services/`**: Core business domain logic, atomic transactions, state machines, and idempotency guarantees.
-- **`src/middlewares/`**:
-  - `auth.ts`: Stateless JWT verification and Role-Based Access Control (`PATIENT`, `ADMIN`).
-  - `validate.ts`: Strict schema validation using **Zod** for `body`, `query`, and `params`.
-  - `requestId.ts`: Distributed tracing correlation header (`X-Request-ID`) and response latency timing.
-  - `errorHandler.ts`: Centralized error handler returning normalized RFC 7807 compliant error payloads.
-- **`src/db/`**: Prisma client singleton with connection pooling and query tracing.
-
----
-
-## 🗄 Database Schema & ER Diagram
-
-The database design adheres to 3rd Normal Form (3NF), separating physical **Centres** and master **Tests** through an associative **`CentreTest`** table. This permits individual centres to maintain distinct pricing and test availability.
-
-```mermaid
-erDiagram
-    User ||--o{ Booking : places
-    DiagnosticCentre ||--o{ CentreTest : offers
-    DiagnosticTest ||--o{ CentreTest : includes
-    DiagnosticCentre ||--o{ Booking : hosts
-    DiagnosticTest ||--o{ Booking : specifies
-    Booking ||--o{ Payment : "settled by"
-    WebhookEvent ||--o{ Payment : "verifies idempotency"
-
-    User {
-        string id PK "UUID"
-        string email UK "Unique indexed email"
-        string password "Bcrypt hash"
-        string fullName "Patient / Admin name"
-        string phone "Contact number"
-        string role "PATIENT | ADMIN"
-        datetime createdAt
-    }
-
-    DiagnosticCentre {
-        string id PK "UUID"
-        string name "Centre Name"
-        string address "Physical Address"
-        string city "City (indexed)"
-        string contactNumber "Phone"
-        boolean isActive "Active status"
-    }
-
-    DiagnosticTest {
-        string id PK "UUID"
-        string name "Test Name"
-        string description "Details & prep"
-        string category "Pathology | Radiology | etc."
-        string sampleRequired "Blood | Urine | None"
-        boolean isActive "Active status"
-    }
-
-    CentreTest {
-        string id PK "UUID"
-        string centreId FK "References DiagnosticCentre"
-        string testId FK "References DiagnosticTest"
-        float price "Centre-specific price"
-        boolean isAvailable "Current availability"
-    }
-
-    Booking {
-        string id PK "UUID"
-        string userId FK "References User"
-        string centreId FK "References DiagnosticCentre"
-        string testId FK "References DiagnosticTest"
-        datetime appointmentTime "Future datetime"
-        float amount "Server-authoritative amount"
-        string status "PENDING | CONFIRMED | FAILED | CANCELLED"
-        string notes "Special instructions"
-    }
-
-    Payment {
-        string id PK "UUID"
-        string bookingId FK "References Booking"
-        string transactionId UK "Unique Gateway Transaction ID"
-        float amount "Paid amount"
-        string status "SUCCESS | FAILED | PENDING"
-        string paymentMethod "CARD | UPI | NET_BANKING | SIMULATED"
-        string providerReference "Provider gateway ref"
-    }
-
-    WebhookEvent {
-        string id PK "UUID"
-        string eventId UK "Unique Idempotency Key"
-        string eventType "payment.succeeded | payment.failed"
-        string payload "Raw JSON event"
-        string status "PROCESSED | DUPLICATE_IGNORED"
-        datetime processedAt "Timestamp"
-    }
-```
-
----
-
-## 🔄 Booking State Machine
-
-```mermaid
-stateDiagram-v2
-    [*] --> PENDING : User books diagnostic test
-    PENDING --> CONFIRMED : Simulated payment SUCCESS / Webhook succeeded
-    PENDING --> FAILED : Simulated payment FAILED / Webhook failed
-    PENDING --> CANCELLED : Patient cancels appointment
-    CONFIRMED --> [*] : Test conducted
-    FAILED --> [*] : Closed
-    CANCELLED --> [*] : Closed
-```
-
----
-
-## 🚀 Quickstart: Zero-Friction Local Run
-
-The project is engineered to support both **PostgreSQL** (the preferred production database with strict relational schemas, migrations, and `DECIMAL(10,2)` monetary precision) and **SQLite** (for instant zero-dependency local testing).
-
-### 1. Prerequisites
-- **Node.js**: v20.0.0 or higher
+Make sure you have installed:
+- **Node.js**: v18.0.0 or higher (v20+ recommended)
 - **npm**: v9.0.0 or higher
+- *(Optional)* **Docker & Docker Compose** (only if running the containerized PostgreSQL stack)
 
-### 2. Backend Setup & Boot (SQLite Mode — Default)
+---
+
+## 🚀 Full Setup & How to Run
+
+### Step 1: Clone the Repository & Install Dependencies
+
 ```bash
-# 1. Clone repository & install dependencies
-git clone https://github.com/<your-repo>/HealthcareManagement.git
+# 1. Clone repository
+git clone https://github.com/<YOUR-USERNAME>/<YOUR-REPO-NAME>.git
 cd HealthcareManagement
+
+# 2. Install root backend dependencies
 npm install
 
-# 2. Setup environment variables (preconfigured for local dev)
-cp .env.example .env
-
-# 3. Initialize database schema & seed initial demo data
-npm run prisma:push
-npm run seed
-
-# 4. Start backend development server with hot-reload
-npm run dev
+# 3. Install frontend dependencies
+cd frontend && npm install && cd ..
 ```
 
-The server boots at:
-- **API Base**: `http://localhost:4000/api/v1`
-- **Interactive Swagger Docs**: `http://localhost:4000/api/docs`
-- **Health Check**: `http://localhost:4000/health`
+---
 
-### 🐘 PostgreSQL Mode (Assignment Preferred)
-To switch to PostgreSQL with full relational migrations:
+### Step 2: Environment Configuration
+
+Copy the sample environment file (the default values are pre-configured for instant local running):
+
 ```bash
-# Switch schema provider to PostgreSQL
+cp .env.example .env
+```
+
+Your `.env` contains:
+```env
+NODE_ENV=development
+PORT=4000
+DATABASE_URL="file:./eve_healthcare.db"
+JWT_SECRET="eve-healthcare-jwt-secret-key-super-secure"
+JWT_EXPIRES_IN="24h"
+WEBHOOK_SECRET="eve-payment-webhook-secret-key"
+```
+
+---
+
+### Step 3: Initialize Database & Seed Demo Data
+
+Run the database sync and seed script. This automatically creates all tables and populates realistic demo centres, diagnostic tests, pricing, and users:
+
+```bash
+# Push Prisma schema to local SQLite database
+npm run prisma:push
+
+# Seed demo diagnostic centres, tests, and user accounts
+npm run seed
+```
+
+---
+
+### Step 4: Start the Applications
+
+#### Option A: Run Locally (Recommended)
+
+Open two terminal tabs:
+
+**Terminal 1 — Backend API Server:**
+```bash
+npm run dev
+```
+- **Backend API**: [http://localhost:4000/api/v1](http://localhost:4000/api/v1)
+- **Interactive Swagger Docs**: [http://localhost:4000/api/docs](http://localhost:4000/api/docs)
+- **Health Check**: [http://localhost:4000/health](http://localhost:4000/health)
+
+**Terminal 2 — Frontend React App:**
+```bash
+cd frontend
+npm run dev
+```
+- **Frontend URL**: [http://localhost:5173](http://localhost:5173)
+
+---
+
+#### Option B: Run with Docker Compose (PostgreSQL 16 + Redis 7 + API)
+
+If you prefer to run the complete containerized stack with **PostgreSQL**:
+
+```bash
+# Build and spin up the complete multi-container stack in the background
+docker compose up --build -d
+
+# View live container logs
+docker compose logs -f app
+
+# Stop containers
+docker compose down
+```
+
+---
+
+### 🐘 How to Switch Between SQLite and PostgreSQL
+
+The codebase includes automated switch scripts so you can work locally with SQLite and deploy with PostgreSQL:
+
+```bash
+# Switch schema provider to PostgreSQL:
 npm run db:use:postgres
 
-# In .env, update DATABASE_URL:
+# In .env, set your PostgreSQL connection:
 # DATABASE_URL="postgresql://postgres:postgres@localhost:5432/eve_healthcare?schema=public"
 
-# Deploy initial migration and seed
+# Deploy migration to PostgreSQL:
 npm run prisma:migrate:deploy
 npm run seed
 
-# To switch back to SQLite at any time:
-# npm run db:use:sqlite
+# Switch back to SQLite anytime:
+npm run db:use:sqlite
 ```
-
-### 💻 Frontend Setup (React + JavaScript + Vite)
-The application includes a rich, responsive Single Page Application:
-```bash
-cd frontend
-npm install
-npm run dev
-```
-Open **[http://localhost:5173](http://localhost:5173)** in your browser. Features:
-- 🏥 **Centres & Tests Catalog**: Live search and city filtering
-- 📅 **Book a Test**: Interactive slot booking with server-authoritative pricing
-- 💳 **My Bookings**: Real-time status tracker and simulated payment modal (Card / UPI / NetBanking)
-- ⚡ **Webhook Lab**: Interactive webhook dispatcher with duplicate event replay, concurrent race condition tester, and status logs
-
-### 🔑 Pre-seeded Credentials for Testing
-| Role | Email | Password |
-|---|---|---|
-| **Admin** | `admin@evehealthcare.com` | `Admin@123456` |
-| **Patient 1** | `john.doe@example.com` | `Patient@123456` |
-| **Patient 2** | `sarah.smith@example.com` | `Patient@123456` |
 
 ---
 
-## 🐳 Docker & Containerized Setup
+## 🧪 How to Run Automated Tests
 
-For containerized environments running **PostgreSQL 16** + **Redis 7** + **Node.js API**:
+The test suite runs 30 end-to-end integration and concurrency tests:
 
 ```bash
-# Build and spin up the complete multi-container stack
-docker-compose up --build -d
+# Run all test suites
+npm test
 
-# View real-time logs
-docker-compose logs -f app
+# Run a specific test suite (e.g. Webhook Idempotency & Concurrency)
+npm test tests/webhook_idempotency.test.ts
 ```
 
----
-
-## 📖 API Documentation & Interactive Swagger UI
-
-Open your browser to:
-👉 **[http://localhost:4000/api/docs](http://localhost:4000/api/docs)**
-
-The Swagger UI provides:
-- Live, interactive request execution directly from the browser.
-- Bearer JWT authorization configuration.
-- Complete input schemas and response contracts.
-- Example payloads for every status code.
+**Test Coverage Highlights:**
+- ✅ **Authentication**: Signup, login, invalid credentials, JWT parsing, RBAC.
+- ✅ **Centres & Tests**: Filter by city, search, admin-only centre creation, pricing association.
+- ✅ **Bookings**: Future date validation, server-authoritative price check, IDOR ownership isolation, cancellation conflict checks.
+- ✅ **Simulated Payments**: Confirmed status reconciliation, duplicate payment prevention.
+- ✅ **Webhook Idempotency**: Repeated delivery safe ingestion, `Promise.all` concurrent race condition resilience, amount mismatch guards, HMAC-SHA256 signature verification.
 
 ---
 
-## 🔌 API Endpoints & Curl Examples
+## 🔑 Pre-seeded Demo Credentials
+
+Use these accounts to test authenticated endpoints or log into the frontend:
+
+| Role | Email | Password | Permissions |
+|---|---|---|---|
+| **Admin** | `admin@evehealthcare.com` | `Admin@123456` | Create centres, manage tests & pricing, inspect all bookings |
+| **Patient 1** | `john.doe@example.com` | `Patient@123456` | Book tests, view/cancel own bookings, process simulated payments |
+| **Patient 2** | `sarah.smith@example.com` | `Patient@123456` | Independent patient account for IDOR authorization testing |
+
+---
+
+## 🌐 API Overview & Quick Curl Examples
 
 ### 1. Authentication
+- `POST /api/v1/auth/signup` — Register as patient (`email`, `password`, `fullName`, `phone`).
+- `POST /api/v1/auth/login` — Authenticate and receive JWT Bearer token.
+- `GET /api/v1/auth/me` — Retrieve authenticated user profile.
 
-#### Register a Patient (`POST /api/v1/auth/signup`)
-*Note: Public signups default strictly to `PATIENT` role to prevent privilege escalation.*
 ```bash
-curl -X POST http://localhost:4000/api/v1/auth/signup \
-  -H "Content-Type: application/json" \
-  -d '{
-    "email": "alex.morgan@example.com",
-    "password": "SecurePassword123!",
-    "fullName": "Alex Morgan",
-    "phone": "+1-555-0188"
-  }'
-```
-
-#### User Login (`POST /api/v1/auth/login`)
-```bash
+# Login Example
 curl -X POST http://localhost:4000/api/v1/auth/login \
   -H "Content-Type: application/json" \
-  -d '{
-    "email": "john.doe@example.com",
-    "password": "Patient@123456"
-  }'
-```
-*Response contains JWT `token`.*
-
----
-
-### 2. Diagnostic Centres & Tests
-
-#### List Centres with Tests & Prices (`GET /api/v1/centres`)
-```bash
-curl -X GET "http://localhost:4000/api/v1/centres?city=New%20York"
+  -d '{"email": "john.doe@example.com", "password": "Patient@123456"}'
 ```
 
-#### Create a Diagnostic Centre (`POST /api/v1/centres` — Admin Only)
-```bash
-curl -X POST http://localhost:4000/api/v1/centres \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <ADMIN_JWT_TOKEN>" \
-  -d '{
-    "name": "EVE Queens Diagnostics",
-    "address": "120 Queens Boulevard",
-    "city": "Queens",
-    "contactNumber": "+1-718-555-4000"
-  }'
-```
+### 2. Centres & Tests
+- `GET /api/v1/centres?city=New York&page=1&limit=20` — Browse centres with available tests and prices.
+- `GET /api/v1/centres/:id` — View specific centre details.
+- `POST /api/v1/centres` — Create a new centre *(Admin only)*.
+- `POST /api/v1/centres/:id/tests` — Add/update test pricing for a centre *(Admin only)*.
+- `GET /api/v1/tests` — Browse all diagnostic tests in the master catalog.
 
-#### Add/Update Test Offering with Price (`POST /api/v1/centres/:id/tests` — Admin Only)
-```bash
-curl -X POST http://localhost:4000/api/v1/centres/<CENTRE_UUID>/tests \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <ADMIN_JWT_TOKEN>" \
-  -d '{
-    "testId": "<TEST_UUID>",
-    "price": 38.50,
-    "isAvailable": true
-  }'
-```
+### 3. Bookings
+- `POST /api/v1/bookings` — Book an appointment (`centreId`, `testId`, `appointmentTime`). Price is calculated server-side.
+- `GET /api/v1/bookings?page=1&limit=20` — List bookings for current patient (or all for Admin).
+- `GET /api/v1/bookings/:id` — View booking details (protected by user ownership).
+- `POST /api/v1/bookings/:id/cancel` — Cancel a `PENDING` booking.
 
----
-
-### 3. Booking System
-
-#### Book a Diagnostic Test (`POST /api/v1/bookings`)
-```bash
-curl -X POST http://localhost:4000/api/v1/bookings \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <PATIENT_JWT_TOKEN>" \
-  -d '{
-    "centreId": "<CENTRE_UUID>",
-    "testId": "<TEST_UUID>",
-    "appointmentTime": "2026-11-20T10:00:00.000Z",
-    "notes": "Patient requires fasting verification"
-  }'
-```
-*Note: Amount is automatically fetched from server catalog to prevent client-side price tampering.*
-
-#### List My Bookings (`GET /api/v1/bookings`)
-```bash
-curl -X GET http://localhost:4000/api/v1/bookings \
-  -H "Authorization: Bearer <PATIENT_JWT_TOKEN>"
-```
-
-#### Cancel a Booking (`POST /api/v1/bookings/:id/cancel`)
-```bash
-curl -X POST http://localhost:4000/api/v1/bookings/<BOOKING_UUID>/cancel \
-  -H "Authorization: Bearer <PATIENT_JWT_TOKEN>"
-```
-
----
-
-### 4. Simulated Payment Service (`POST /payments/`)
+### 4. Simulated Payments
+- `POST /payments/` *(or `/api/v1/payments/`)* — Simulate card/UPI payment (`bookingId`, `paymentMethod`, `simulateStatus: "SUCCESS" | "FAILED"`).
 
 ```bash
 curl -X POST http://localhost:4000/payments \
@@ -352,178 +242,66 @@ curl -X POST http://localhost:4000/payments \
     "simulateStatus": "SUCCESS"
   }'
 ```
-*Supported `simulateStatus`: `"SUCCESS"` (transitions booking to `CONFIRMED`) or `"FAILED"` (transitions booking to `FAILED`).*
 
----
-
-### 5. Payment Webhook (`POST /payments/webhook/`)
-
-*Security*: Supports optional HMAC-SHA256 signature verification via the `X-Webhook-Signature` header computed with `WEBHOOK_SECRET`. In dev/evaluation environments without signature headers, requests are accepted for test convenience while enforcing strict payload validation and idempotency.
+### 5. Idempotent Payment Webhook
+- `POST /payments/webhook/` *(or `/api/v1/payments/webhook/`)* — Ingest payment provider event updates.
+- If called repeatedly with the same `eventId`, it safely returns `already_processed` without creating duplicate payments or corrupting the booking state.
 
 ```bash
 curl -X POST http://localhost:4000/payments/webhook \
   -H "Content-Type: application/json" \
-  -H "X-Webhook-Signature: <HMAC_SHA256_HEX>" \
+  -H "X-Webhook-Signature: <OPTIONAL_HMAC_SHA256>" \
   -d '{
-    "eventId": "evt_webhook_live_001",
+    "eventId": "evt_live_test_001",
     "eventType": "payment.succeeded",
     "bookingId": "<BOOKING_UUID>",
-    "transactionId": "TXN_GATEWAY_9921",
-    "amount": 45.0,
-    "timestamp": "2026-10-01T15:30:00Z"
+    "transactionId": "TXN_GATEWAY_101",
+    "amount": 45.0
   }'
 ```
 
-**First Call Response**:
-```json
-{
-  "success": true,
-  "message": "Webhook processed successfully and booking state reconciled.",
-  "data": {
-    "status": "processed",
-    "eventId": "evt_webhook_live_001",
-    "bookingStatus": "CONFIRMED"
-  }
-}
-```
-
-**Second Call (Identical Event ID)**:
-```json
-{
-  "success": true,
-  "message": "Duplicate webhook event received; safely ignored without duplicate state change.",
-  "data": {
-    "status": "already_processed",
-    "eventId": "evt_webhook_live_001"
-  }
-}
-```
-
 ---
 
-## 🔒 Idempotency & Concurrency Deep Dive
+## 🏛️ Project Directory Structure
 
-### Problem Statement
-In real-world payment integrations (Stripe, Razorpay, Adyen), webhooks are frequently resent due to network drops, timeouts, or gateway retry policies. Without idempotency protection:
-1. Customers may get charged multiple times.
-2. Duplicate booking or payment records get written.
-3. Race conditions between simultaneous webhooks corrupt the booking state.
-
-### How EVE Healthcare Solves This:
-1. **Unique Idempotency Event Registry**:
-   - The `WebhookEvent` table maintains a database-enforced unique constraint on `eventId`.
-2. **Pre-Flight Dedup Check**:
-   - Before executing any domain logic, the service checks if `eventId` exists. If present, it **immediately returns HTTP 200** with `status: 'already_processed'`.
-   - *Why HTTP 200?* Returning 4xx or 5xx causes payment gateways to retry indefinitely. An idempotent endpoint must acknowledge receipt.
-3. **Database Transaction (`$transaction`) Isolation**:
-   - The event insertion, payment record creation, and booking state transition run within an atomic transaction.
-4. **Race-Condition Immunity**:
-   - Even if 5 identical webhook deliveries hit the API simultaneously in separate OS threads, the DB unique index triggers a unique constraint collision (`P2002`). The service gracefully intercepts this collision and treats the trailing requests as safely handled duplicates.
-
----
-
-## 🛡 Edge-Case Handling Matrix
-
-| Edge Case | Risk | Resolution | HTTP Status |
-|---|---|---|---|
-| **Duplicate Webhook Delivery** | Double booking / duplicate payment records | Idempotency event registry (`eventId`) | `200 OK` (Duplicate Ignored) |
-| **Concurrent Duplicate Webhook Race** | Simultaneous DB writes corrupting state | DB unique index + transaction catch block | `200 OK` (Already Handled) |
-| **Tampered / Stale Webhook Amount** | Undercharging / fraud | Strict comparison with authoritative booking amount | `400 Bad Request` |
-| **Booking in Past Date** | Invalid diagnostic schedule | Zod validator: `appointmentTime > new Date()` | `400 Bad Request` |
-| **Cross-User Data Access** | Patient B viewing/paying Patient A's booking | Ownership authorization check (`userId === req.user.userId`) | `403 Forbidden` |
-| **Unauthorized Catalogue Mutation** | Patient modifying centre or test prices | Role-Based Access Control (`requireRole('ADMIN')`) | `403 Forbidden` |
-| **Double Payment Attempt** | Paying for already `CONFIRMED` booking | State machine check rejects payment if `status !== 'PENDING'` | `409 Conflict` |
-| **Paying for Cancelled Booking** | Processing funds on inactive booking | State guard prevents transition from `CANCELLED` | `409 Conflict` |
-| **Re-cancelling Cancelled Booking** | Redundant mutation / state drift | State guard rejects cancel if `status === 'CANCELLED'` | `409 Conflict` |
-| **Invalid / Non-existent UUIDs** | DB crashes / unhandled exceptions | Zod UUID validator + Prisma RecordNotFound handler | `400 Bad Request` / `404 Not Found` |
-
----
-
-## 🧪 Test Suite Execution
-
-A comprehensive automated test suite covers all requirements using **Jest** and **Supertest**:
-
-```bash
-# Run all unit, integration, and idempotency tests
-npm test
+```text
+HealthcareManagement/
+├── .env.example             # Template for environment variables
+├── .gitignore               # Comprehensive Git ignore rules
+├── Dockerfile               # Production multi-stage Docker build
+├── docker-compose.yml       # Multi-container orchestration (App, Postgres, Redis)
+├── package.json             # Root dependencies & convenience scripts
+├── tsconfig.json            # Strict TypeScript configuration
+├── jest.config.js           # Jest test runner setup
+├── README.md                # Project documentation & setup guide
+├── prisma/
+│   ├── schema.prisma        # Active Prisma schema
+│   ├── schema.postgresql.prisma # PostgreSQL production schema
+│   ├── schema.sqlite.prisma # SQLite zero-setup schema
+│   └── migrations/          # SQL migrations for PostgreSQL
+├── src/
+│   ├── server.ts            # HTTP server entrypoint & graceful shutdown
+│   ├── app.ts               # Express application initialization & middleware stack
+│   ├── config/              # Fail-fast Zod-validated environment config
+│   ├── controllers/         # HTTP request/response handlers
+│   ├── db/                  # Prisma Client singleton
+│   ├── docs/                # OpenAPI / Swagger specifications
+│   ├── errors/              # Domain-specific AppError hierarchy
+│   ├── middlewares/         # Auth, Zod validation, ErrorHandler, RequestID
+│   ├── routes/              # Semantic API versioned routes
+│   ├── schemas/             # Zod input validation schemas
+│   ├── services/            # Business domain logic, transactions, state machine
+│   ├── types/               # TypeScript interfaces & utility types
+│   ├── utils/               # Structured logger & security/crypto helpers
+│   └── scripts/
+│       └── seed.ts          # Database seeder with realistic demo data
+├── tests/                   # 30 automated integration & concurrency tests
+└── frontend/                # Full React + Vite Single Page Application
+    ├── package.json
+    ├── vite.config.js
+    ├── index.html
+    └── src/
+        ├── App.jsx          # Main application shell with tab navigation
+        ├── api.js           # Centralized API client
+        └── components/      # UI components (Catalog, Booking, MyBookings, WebhookLab)
 ```
-
-### Test Suite Summary:
-```
- PASS  tests/auth.test.ts
-  1. Authentication Module
-    ✓ should register a new patient user successfully and return JWT
-    ✓ should reject signup with duplicate email (409 Conflict)
-    ✓ should reject signup with invalid payload
-    ✓ should authenticate user and return JWT on valid login
-    ✓ should reject login with incorrect password (401 Unauthorized)
-    ✓ should get current user profile using valid JWT token
-    ✓ should reject request when Authorization header is missing (401 Unauthorized)
-
- PASS  tests/centres_tests.test.ts
-  2. Centres & Tests Module
-    ✓ should list all diagnostic centres with available tests and prices
-    ✓ should filter centres by city query param
-    ✓ should list all diagnostic tests in the master catalog
-    ✓ should allow ADMIN to create a new diagnostic centre
-    ✓ should reject centre creation from a PATIENT (403 Forbidden)
-    ✓ should allow ADMIN to add/update test offering with price at centre
-
- PASS  tests/bookings.test.ts
-  3. Booking System Module
-    ✓ should successfully book a diagnostic test with future appointment
-    ✓ should reject booking when appointment date is in the past
-    ✓ should list bookings for authenticated patient
-    ✓ should prevent Patient B from accessing Patient A booking (403 Forbidden)
-    ✓ should allow Patient A to cancel their own PENDING booking
-    ✓ should reject cancelling an already CANCELLED booking (409 Conflict)
-
- PASS  tests/payments.test.ts
-  4. Simulated Payment Service
-    ✓ should reject payment if user does not own the booking (403 Forbidden)
-    ✓ should process successful simulated payment and update booking to CONFIRMED
-    ✓ should reject payment on an already CONFIRMED booking (409 Conflict)
-    ✓ should process failed simulated payment and update booking to FAILED
-
- PASS  tests/webhook_idempotency.test.ts
-  5. Payment Webhook & Strict Idempotency Module
-    ✓ should process webhook event on first delivery and confirm booking
-    ✓ IDEMPOTENCY: should safely ignore repeated delivery of the same webhook event
-    ✓ RACE CONDITION RESILIENCE: concurrent webhook requests with identical eventId must remain idempotent
-    ✓ should reject webhook for non-existent booking ID (404 Not Found)
-    ✓ should reject webhook when amount mismatches booking amount (400 Bad Request)
-
-Test Suites: 5 passed, 5 total
-Tests:       28 passed, 28 total
-Snapshots:   0 total
-Time:        3.2 s
-```
-
----
-
-## 💡 Design Assumptions
-
-1. **Test Pricing by Centre**:
-   - The same test (e.g. *Chest X-Ray*) may have different operational costs across different geographic locations. Therefore, prices are modeled on the associative `CentreTest` relation rather than directly on `DiagnosticTest`.
-2. **Server-Authoritative Pricing**:
-   - When a patient books an appointment, the price is looked up directly on the server from `CentreTest.price`. The client cannot pass an `amount` parameter, preventing client-side price tampering.
-3. **Stateless Authentication**:
-   - JWT tokens are signed with HMAC-SHA256 (`HS256`) and carry `userId`, `email`, and `role`. This enables horizontal scaling without sticky sessions.
-4. **Webhook Acknowledgment Standard**:
-   - Payment webhooks return HTTP 200 for duplicate events, matching standard payment provider specifications (Stripe / Razorpay).
-
----
-
-## 🔮 Future Improvements & Production Readiness
-
-If allocated additional engineering time:
-1. **Distributed Locks (Redis / Redlock)**:
-   - Introduce distributed mutex locks around `bookingId` during payment execution across multi-pod Kubernetes clusters.
-2. **Dead-Letter Queue (DLQ) & Asynchronous Webhook Workers**:
-   - Ingest webhooks immediately into a message broker (RabbitMQ / Apache Kafka / Redis BullMQ) and process asynchronously with exponential backoff and DLQ alerting.
-3. **Audit Trail & Event Sourcing**:
-   - Add an append-only `BookingAuditLog` table capturing actor, previous state, new state, and reason for every transition.
-4. **HMAC Webhook Signature Enforcing**:
-   - Enforce mandatory cryptographically signed webhook signatures using provider secrets.
-5. **Observability**:
-   - Integrate OpenTelemetry metrics, Prometheus scraping, and Datadog APM tracing for sub-millisecond bottleneck detection.
