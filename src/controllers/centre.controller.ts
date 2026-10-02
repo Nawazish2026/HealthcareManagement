@@ -5,10 +5,12 @@ import { centreService } from '../services/centre.service';
 export class CentreController {
   async listCentres(req: AuthenticatedRequest, res: Response, next: NextFunction) {
     try {
-      const centres = await centreService.listCentres(req.query as any);
+      const query = (req as any).validatedQuery || req.query;
+      const { centres, pagination } = await centreService.listCentres(query);
       res.status(200).json({
         success: true,
         count: centres.length,
+        pagination,
         data: centres,
       });
     } catch (error) {

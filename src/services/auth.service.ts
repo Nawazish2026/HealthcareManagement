@@ -22,7 +22,7 @@ export class AuthService {
         password: hashedPassword,
         fullName: input.fullName,
         phone: input.phone,
-        role: input.role || 'PATIENT',
+        role: 'PATIENT',
       },
       select: {
         id: true,

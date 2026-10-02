@@ -2,7 +2,7 @@ import request from 'supertest';
 import app from '../src/app';
 import prisma from '../src/db/prisma';
 
-describe('5. Payment Webhook & Strict Idempotency Module', () => {
+describe('Payment Webhooks & Idempotency Pipeline', () => {
   let webhookBookingId: string;
   const bookingAmount = 45.0;
 
@@ -179,4 +179,42 @@ describe('5. Payment Webhook & Strict Idempotency Module', () => {
     expect(res.body.success).toBe(false);
     expect(res.body.error.message).toContain('amount mismatch');
   });
+
+  it('SECURITY: should reject webhook when HMAC signature is invalid', async () => {
+    const res = await request(app)
+      .post('/payments/webhook')
+      .set('x-webhook-signature', 'invalid-hex-signature-1234567890abcdef')
+      .send({
+        eventId: `evt_bad_sig_${Date.now()}`,
+        eventType: 'payment.succeeded',
+        bookingId: webhookBookingId,
+        transactionId: `txn_bad_sig_${Date.now()}`,
+        amount: bookingAmount,
+      });
+
+    expect(res.status).toBe(401);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error.message).toContain('Invalid HMAC webhook signature');
+  });
+
+  it('SECURITY: should accept webhook when valid HMAC signature is provided', async () => {
+    const { generateWebhookSignature } = await import('../src/utils/security');
+    const payload = {
+      eventId: `evt_valid_sig_${Date.now()}`,
+      eventType: 'payment.succeeded',
+      bookingId: webhookBookingId,
+      transactionId: `txn_valid_sig_${Date.now()}`,
+      amount: bookingAmount,
+    };
+    const signature = generateWebhookSignature(payload);
+
+    const res = await request(app)
+      .post('/payments/webhook')
+      .set('x-webhook-signature', signature)
+      .send(payload);
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+  });
 });
+

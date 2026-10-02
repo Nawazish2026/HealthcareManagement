@@ -7,7 +7,7 @@ export class WebhookService {
   async processPaymentWebhook(input: PaymentWebhookInput) {
     logger.info(`Received payment webhook event: ${input.eventId} [${input.eventType}]`);
 
-    // 1. Check if event was already received and processed (Idempotency check)
+    // Deduplication check: return cached status for previously processed events
     const existingEvent = await prisma.webhookEvent.findUnique({
       where: { eventId: input.eventId },
     });
@@ -24,7 +24,6 @@ export class WebhookService {
       };
     }
 
-    // 2. Fetch target booking
     const booking = await prisma.booking.findUnique({
       where: { id: input.bookingId },
     });
@@ -33,13 +32,15 @@ export class WebhookService {
       throw new NotFoundError(`Booking with ID '${input.bookingId}' specified in webhook does not exist.`);
     }
 
-    // 3. Amount consistency check
-    if (Math.abs(booking.amount - input.amount) > 0.01) {
+    // Guard against underpayment or mismatched transaction amounts
+    const bookingAmount = Number(booking.amount);
+    const incomingAmount = Number(input.amount);
+    if (Math.abs(bookingAmount - incomingAmount) > 0.01) {
       logger.error(
-        `Webhook amount mismatch: Webhook specified ${input.amount}, but Booking requires ${booking.amount}`
+        `Webhook amount mismatch: Webhook specified ${incomingAmount}, but Booking requires ${bookingAmount}`
       );
       throw new BadRequestError(
-        `Payment amount mismatch: Expected ${booking.amount}, received ${input.amount}`
+        `Payment amount mismatch: Expected ${bookingAmount}, received ${incomingAmount}`
       );
     }
 
@@ -48,7 +49,7 @@ export class WebhookService {
     const targetBookingStatus = isSuccess ? 'CONFIRMED' : 'FAILED';
 
     try {
-      // 4. Atomic transaction: Record event + Record payment + Update booking
+      // Execute atomic transition: persist event log, create payment record, and reconcile booking status
       const result = await prisma.$transaction(async (tx) => {
         // Record idempotency event
         const event = await tx.webhookEvent.create({

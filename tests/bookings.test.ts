@@ -3,7 +3,7 @@ import app from '../src/app';
 import prisma from '../src/db/prisma';
 import { generateToken } from '../src/utils/security';
 
-describe('3. Booking System Module', () => {
+describe('Diagnostic Test Bookings Engine', () => {
   let patientA: any;
   let patientB: any;
   let tokenA: string;

@@ -10,9 +10,8 @@ import { authenticate } from '../middlewares/auth';
 const router = Router();
 
 /**
- * Requirement 4: Simulated Payment Service
- * POST /payments/ (or /api/v1/payments/)
- * Authenticated user simulates a payment for their booking.
+ * Process a simulated payment for a pending booking.
+ * Restricted to authenticated users for their own bookings.
  */
 router.post(
   '/',
@@ -22,10 +21,8 @@ router.post(
 );
 
 /**
- * Requirement 5: Payment Webhook
- * POST /payments/webhook/ (or /api/v1/payments/webhook/)
- * Accepts payment status updates from external payment provider.
- * Must be strictly idempotent and safe against repeated events.
+ * Payment provider webhook callback endpoint.
+ * Ingests asynchronous payment status events with strict idempotency guarantees.
  */
 router.post(
   '/webhook',

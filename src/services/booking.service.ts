@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import prisma from '../db/prisma';
 import { CreateBookingInput, ListBookingsQuery } from '../schemas/booking.schema';
 import {
@@ -10,23 +11,7 @@ import { TokenPayload } from '../types';
 
 export class BookingService {
   async createBooking(user: TokenPayload, input: CreateBookingInput) {
-    // 1. Verify centre exists and is active
-    const centre = await prisma.diagnosticCentre.findUnique({
-      where: { id: input.centreId },
-    });
-    if (!centre || !centre.isActive) {
-      throw new NotFoundError(`Diagnostic centre not found or currently inactive`);
-    }
-
-    // 2. Verify test exists and is active
-    const test = await prisma.diagnosticTest.findUnique({
-      where: { id: input.testId },
-    });
-    if (!test || !test.isActive) {
-      throw new NotFoundError(`Diagnostic test not found or currently inactive`);
-    }
-
-    // 3. Verify test is offered by this specific centre and is available
+    // Single query validates centre, test, and active offering relationship in one roundtrip
     const centreTest = await prisma.centreTest.findUnique({
       where: {
         centreId_testId: {
@@ -34,21 +19,48 @@ export class BookingService {
           testId: input.testId,
         },
       },
+      include: {
+        centre: true,
+        test: true,
+      },
     });
 
-    if (!centreTest || !centreTest.isAvailable) {
+    if (!centreTest) {
+      const [centre, test] = await Promise.all([
+        prisma.diagnosticCentre.findUnique({ where: { id: input.centreId } }),
+        prisma.diagnosticTest.findUnique({ where: { id: input.testId } }),
+      ]);
+      if (!centre || !centre.isActive) {
+        throw new NotFoundError(`Diagnostic centre not found or currently inactive`);
+      }
+      if (!test || !test.isActive) {
+        throw new NotFoundError(`Diagnostic test not found or currently inactive`);
+      }
       throw new BadRequestError(
         `The test '${test.name}' is not currently available at '${centre.name}'`
       );
     }
 
-    // 4. Validate appointment is in the future
+    if (!centreTest.centre.isActive) {
+      throw new NotFoundError(`Diagnostic centre not found or currently inactive`);
+    }
+
+    if (!centreTest.test.isActive) {
+      throw new NotFoundError(`Diagnostic test not found or currently inactive`);
+    }
+
+    if (!centreTest.isAvailable) {
+      throw new BadRequestError(
+        `The test '${centreTest.test.name}' is not currently available at '${centreTest.centre.name}'`
+      );
+    }
+
     const appointmentDate = new Date(input.appointmentTime);
     if (appointmentDate <= new Date()) {
       throw new BadRequestError('Appointment date and time must be in the future');
     }
 
-    // 5. Create booking with server-authoritative price to prevent client tampering
+    // Amount is derived directly from the server catalogue to prevent client tampering
     const booking = await prisma.booking.create({
       data: {
         userId: user.userId,
@@ -76,7 +88,11 @@ export class BookingService {
   }
 
   async listBookings(user: TokenPayload, query: ListBookingsQuery) {
-    const where: any = {};
+    const page = Math.max(1, Number(query.page) || 1);
+    const limit = Math.min(100, Math.max(1, Number(query.limit) || 20));
+    const skip = (page - 1) * limit;
+
+    const where: Prisma.BookingWhereInput = {};
 
     // Patient can only view their own bookings; Admin can view all or filter
     if (user.role !== 'ADMIN') {
@@ -91,21 +107,36 @@ export class BookingService {
       where.centreId = query.centreId;
     }
 
-    return prisma.booking.findMany({
-      where,
-      include: {
-        centre: {
-          select: { id: true, name: true, city: true },
+    const [total, bookings] = await Promise.all([
+      prisma.booking.count({ where }),
+      prisma.booking.findMany({
+        where,
+        skip,
+        take: limit,
+        include: {
+          centre: {
+            select: { id: true, name: true, city: true },
+          },
+          test: {
+            select: { id: true, name: true, category: true },
+          },
+          payments: {
+            select: { id: true, transactionId: true, amount: true, status: true, createdAt: true },
+          },
         },
-        test: {
-          select: { id: true, name: true, category: true },
-        },
-        payments: {
-          select: { id: true, transactionId: true, amount: true, status: true, createdAt: true },
-        },
+        orderBy: { createdAt: 'desc' },
+      }),
+    ]);
+
+    return {
+      bookings,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
       },
-      orderBy: { createdAt: 'desc' },
-    });
+    };
   }
 
   async getBookingById(user: TokenPayload, bookingId: string) {

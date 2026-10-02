@@ -18,10 +18,12 @@ export class BookingController {
 
   async listBookings(req: AuthenticatedRequest, res: Response, next: NextFunction) {
     try {
-      const bookings = await bookingService.listBookings(req.user!, req.query as any);
+      const query = (req as any).validatedQuery || req.query;
+      const { bookings, pagination } = await bookingService.listBookings(req.user!, query);
       res.status(200).json({
         success: true,
         count: bookings.length,
+        pagination,
         data: bookings,
       });
     } catch (error) {

@@ -151,34 +151,64 @@ stateDiagram-v2
 
 ## 🚀 Quickstart: Zero-Friction Local Run
 
-The project is built with zero mandatory external dependencies for local development. SQLite is configured as default, enabling instant boot and verification.
+The project is engineered to support both **PostgreSQL** (the preferred production database with strict relational schemas, migrations, and `DECIMAL(10,2)` monetary precision) and **SQLite** (for instant zero-dependency local testing).
 
 ### 1. Prerequisites
-- **Node.js**: v18.0.0 or higher
+- **Node.js**: v20.0.0 or higher
 - **npm**: v9.0.0 or higher
 
-### 2. Setup & Boot
+### 2. Backend Setup & Boot (SQLite Mode — Default)
 ```bash
 # 1. Clone repository & install dependencies
 git clone https://github.com/<your-repo>/HealthcareManagement.git
 cd HealthcareManagement
 npm install
 
-# 2. Setup environment variables (default preconfigured)
+# 2. Setup environment variables (preconfigured for local dev)
 cp .env.example .env
 
 # 3. Initialize database schema & seed initial demo data
 npm run prisma:push
 npm run seed
 
-# 4. Start development server with hot-reload
+# 4. Start backend development server with hot-reload
 npm run dev
 ```
 
-The server will spin up at:
+The server boots at:
 - **API Base**: `http://localhost:4000/api/v1`
 - **Interactive Swagger Docs**: `http://localhost:4000/api/docs`
 - **Health Check**: `http://localhost:4000/health`
+
+### 🐘 PostgreSQL Mode (Assignment Preferred)
+To switch to PostgreSQL with full relational migrations:
+```bash
+# Switch schema provider to PostgreSQL
+npm run db:use:postgres
+
+# In .env, update DATABASE_URL:
+# DATABASE_URL="postgresql://postgres:postgres@localhost:5432/eve_healthcare?schema=public"
+
+# Deploy initial migration and seed
+npm run prisma:migrate:deploy
+npm run seed
+
+# To switch back to SQLite at any time:
+# npm run db:use:sqlite
+```
+
+### 💻 Frontend Setup (React + JavaScript + Vite)
+The application includes a rich, responsive Single Page Application:
+```bash
+cd frontend
+npm install
+npm run dev
+```
+Open **[http://localhost:5173](http://localhost:5173)** in your browser. Features:
+- 🏥 **Centres & Tests Catalog**: Live search and city filtering
+- 📅 **Book a Test**: Interactive slot booking with server-authoritative pricing
+- 💳 **My Bookings**: Real-time status tracker and simulated payment modal (Card / UPI / NetBanking)
+- ⚡ **Webhook Lab**: Interactive webhook dispatcher with duplicate event replay, concurrent race condition tester, and status logs
 
 ### 🔑 Pre-seeded Credentials for Testing
 | Role | Email | Password |
@@ -221,6 +251,7 @@ The Swagger UI provides:
 ### 1. Authentication
 
 #### Register a Patient (`POST /api/v1/auth/signup`)
+*Note: Public signups default strictly to `PATIENT` role to prevent privilege escalation.*
 ```bash
 curl -X POST http://localhost:4000/api/v1/auth/signup \
   -H "Content-Type: application/json" \
@@ -228,8 +259,7 @@ curl -X POST http://localhost:4000/api/v1/auth/signup \
     "email": "alex.morgan@example.com",
     "password": "SecurePassword123!",
     "fullName": "Alex Morgan",
-    "phone": "+1-555-0188",
-    "role": "PATIENT"
+    "phone": "+1-555-0188"
   }'
 ```
 
@@ -328,9 +358,12 @@ curl -X POST http://localhost:4000/payments \
 
 ### 5. Payment Webhook (`POST /payments/webhook/`)
 
+*Security*: Supports optional HMAC-SHA256 signature verification via the `X-Webhook-Signature` header computed with `WEBHOOK_SECRET`. In dev/evaluation environments without signature headers, requests are accepted for test convenience while enforcing strict payload validation and idempotency.
+
 ```bash
 curl -X POST http://localhost:4000/payments/webhook \
   -H "Content-Type: application/json" \
+  -H "X-Webhook-Signature: <HMAC_SHA256_HEX>" \
   -d '{
     "eventId": "evt_webhook_live_001",
     "eventType": "payment.succeeded",

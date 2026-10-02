@@ -2,7 +2,7 @@ import request from 'supertest';
 import app from '../src/app';
 import prisma from '../src/db/prisma';
 
-describe('1. Authentication Module', () => {
+describe('Authentication & User Management', () => {
   const testUser = {
     email: `test_${Date.now()}@example.com`,
     password: 'Password123!',

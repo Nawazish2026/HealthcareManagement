@@ -3,7 +3,7 @@ import app from '../src/app';
 import prisma from '../src/db/prisma';
 import { generateToken } from '../src/utils/security';
 
-describe('4. Simulated Payment Service', () => {
+describe('Payment Simulation & Ledger', () => {
   let patientA: any;
   let patientB: any;
   let tokenA: string;

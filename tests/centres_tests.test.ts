@@ -3,7 +3,7 @@ import app from '../src/app';
 import prisma from '../src/db/prisma';
 import { generateToken } from '../src/utils/security';
 
-describe('2. Centres & Tests Module', () => {
+describe('Diagnostic Centres & Test Offerings', () => {
   let adminToken: string;
   let patientToken: string;
   let testCentreId: string;

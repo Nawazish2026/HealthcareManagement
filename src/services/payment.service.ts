@@ -7,7 +7,6 @@ import { logger } from '../utils/logger';
 
 export class PaymentService {
   async processSimulatedPayment(user: TokenPayload, input: SimulatePaymentInput) {
-    // 1. Fetch booking
     const booking = await prisma.booking.findUnique({
       where: { id: input.bookingId },
       include: {
@@ -20,12 +19,12 @@ export class PaymentService {
       throw new NotFoundError(`Booking with ID '${input.bookingId}' not found`);
     }
 
-    // 2. Ownership verification: patient can only pay for their own booking
+    // Authorization check: ensure users can only pay for their own bookings
     if (user.role !== 'ADMIN' && booking.userId !== user.userId) {
       throw new ForbiddenError('You are not authorized to make a payment for this booking');
     }
 
-    // 3. State machine validation
+    // State machine check: ensure the booking is in a valid state to receive payment
     if (booking.status === 'CONFIRMED') {
       throw new ConflictError('This booking is already confirmed and paid for.');
     }
@@ -38,7 +37,6 @@ export class PaymentService {
       throw new ConflictError('This booking has previously failed. Please create a new booking.');
     }
 
-    // 4. Determine simulation outcome
     const paymentStatus = input.simulateStatus || 'SUCCESS';
     const newBookingStatus = paymentStatus === 'SUCCESS' ? 'CONFIRMED' : 'FAILED';
     const transactionId = `TXN-${Date.now()}-${crypto.randomUUID().substring(0, 8).toUpperCase()}`;
@@ -47,7 +45,7 @@ export class PaymentService {
       `Processing simulated payment for booking ${booking.id} - Amount: ${booking.amount}, Status: ${paymentStatus}`
     );
 
-    // 5. Execute atomic transaction: record payment and transition booking state
+    // Atomically persist payment entry and transition booking state
     const [payment, updatedBooking] = await prisma.$transaction([
       prisma.payment.create({
         data: {

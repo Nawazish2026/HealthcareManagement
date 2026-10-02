@@ -2,6 +2,8 @@ import { Response, NextFunction } from 'express';
 import { AuthenticatedRequest } from '../types';
 import { paymentService } from '../services/payment.service';
 import { webhookService } from '../services/webhook.service';
+import { verifyWebhookSignature } from '../utils/security';
+import { UnauthorizedError } from '../errors/AppError';
 
 export class PaymentController {
   async processPayment(req: AuthenticatedRequest, res: Response, next: NextFunction) {
@@ -19,6 +21,13 @@ export class PaymentController {
 
   async handleWebhook(req: AuthenticatedRequest, res: Response, next: NextFunction) {
     try {
+      const signature = req.headers['x-webhook-signature'] as string | undefined;
+      if (signature) {
+        const isValid = verifyWebhookSignature(req.body, signature);
+        if (!isValid) {
+          throw new UnauthorizedError('Invalid HMAC webhook signature');
+        }
+      }
       const result = await webhookService.processPaymentWebhook(req.body);
       res.status(200).json({
         success: true,

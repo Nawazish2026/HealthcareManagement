@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import prisma from '../db/prisma';
 import { CreateCentreInput, AddTestToCentreInput, ListCentresQuery } from '../schemas/centre.schema';
 import { CreateTestInput, ListTestsQuery } from '../schemas/test.schema';
@@ -6,7 +7,11 @@ import { NotFoundError, ConflictError } from '../errors/AppError';
 export class CentreService {
   // Centre Operations
   async listCentres(query: ListCentresQuery) {
-    const where: any = { isActive: true };
+    const page = Math.max(1, Number(query.page) || 1);
+    const limit = Math.min(100, Math.max(1, Number(query.limit) || 20));
+    const skip = (page - 1) * limit;
+
+    const where: Prisma.DiagnosticCentreWhereInput = { isActive: true };
 
     if (query.city) {
       where.city = { contains: query.city };
@@ -20,20 +25,25 @@ export class CentreService {
       ];
     }
 
-    const centres = await prisma.diagnosticCentre.findMany({
-      where,
-      include: {
-        centreTests: {
-          where: { isAvailable: true },
-          include: {
-            test: true,
+    const [total, centres] = await Promise.all([
+      prisma.diagnosticCentre.count({ where }),
+      prisma.diagnosticCentre.findMany({
+        where,
+        skip,
+        take: limit,
+        include: {
+          centreTests: {
+            where: { isAvailable: true },
+            include: {
+              test: true,
+            },
           },
         },
-      },
-      orderBy: { name: 'asc' },
-    });
+        orderBy: { name: 'asc' },
+      }),
+    ]);
 
-    return centres.map((centre) => ({
+    const formatted = centres.map((centre) => ({
       id: centre.id,
       name: centre.name,
       address: centre.address,
@@ -51,6 +61,16 @@ export class CentreService {
       })),
       createdAt: centre.createdAt,
     }));
+
+    return {
+      centres: formatted,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
   }
 
   async getCentreById(id: string) {
@@ -98,7 +118,11 @@ export class CentreService {
 
   // Test Operations
   async listTests(query: ListTestsQuery) {
-    const where: any = { isActive: true };
+    const page = Math.max(1, Number(query.page) || 1);
+    const limit = Math.min(100, Math.max(1, Number(query.limit) || 50));
+    const skip = (page - 1) * limit;
+
+    const where: Prisma.DiagnosticTestWhereInput = { isActive: true };
 
     if (query.category) {
       where.category = { contains: query.category };
@@ -111,10 +135,25 @@ export class CentreService {
       ];
     }
 
-    return prisma.diagnosticTest.findMany({
-      where,
-      orderBy: { name: 'asc' },
-    });
+    const [total, tests] = await Promise.all([
+      prisma.diagnosticTest.count({ where }),
+      prisma.diagnosticTest.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { name: 'asc' },
+      }),
+    ]);
+
+    return {
+      tests,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
   }
 
   async createTest(input: CreateTestInput) {

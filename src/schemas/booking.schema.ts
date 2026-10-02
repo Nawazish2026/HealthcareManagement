@@ -16,6 +16,8 @@ export const createBookingSchema = z.object({
 export const listBookingsQuerySchema = z.object({
   status: z.enum(['PENDING', 'CONFIRMED', 'FAILED', 'CANCELLED']).optional(),
   centreId: z.string().uuid().optional(),
+  page: z.coerce.number().int().min(1).default(1).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(20).optional(),
 });
 
 export type CreateBookingInput = z.infer<typeof createBookingSchema>;

@@ -11,7 +11,10 @@
     "test": "jest --runInBand --detectOpenHandles --forceExit",
     "prisma:push": "prisma db push",
     "prisma:generate": "prisma generate",
-    "prisma:studio": "prisma studio"
+    "prisma:studio": "prisma studio",
+    "prisma:migrate:deploy": "prisma migrate deploy",
+    "db:use:postgres": "cp prisma/schema.postgresql.prisma prisma/schema.prisma && prisma generate",
+    "db:use:sqlite": "cp prisma/schema.sqlite.prisma prisma/schema.prisma && prisma generate"
   },
   "keywords": [],
   "author": "",

@@ -5,10 +5,12 @@ import { centreService } from '../services/centre.service';
 export class TestController {
   async listTests(req: AuthenticatedRequest, res: Response, next: NextFunction) {
     try {
-      const tests = await centreService.listTests(req.query as any);
+      const query = (req as any).validatedQuery || req.query;
+      const { tests, pagination } = await centreService.listTests(query);
       res.status(200).json({
         success: true,
         count: tests.length,
+        pagination,
         data: tests,
       });
     } catch (error) {
